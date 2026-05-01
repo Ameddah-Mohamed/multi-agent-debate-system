@@ -1,0 +1,6 @@
+langchain
+langgraph
+python-dotenv
+pydantic
+langchain_google_genai
+langchain-ollama
