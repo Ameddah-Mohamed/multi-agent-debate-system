@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 from typing import TypedDict, Annotated, Literal
 from pydantic import BaseModel, Field
 from typing import List
+
+from langgraph.checkpoint.memory import MemorySaver
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain.messages import HumanMessage, AIMessage, SystemMessage
 from langgraph.graph.message import add_messages
@@ -24,9 +26,18 @@ llm = ChatOllama(
 
 config = {"configurable": {"thread_id": "debate-1"}}
 
+
+class Topic(BaseModel):
+    topic_title: str = Field(description="The title of the debate topic")
+    description: str = Field(description="A brief description of the debate topic")
+
+class TopicList(BaseModel):
+    topics: List[Topic] = Field(description="A list of exactly 5 debate topics")
+
+
 class DebateState(TypedDict):
     topic: str
-    topic_options: list[str | None] 
+    topic_options: List[Topic]
     topic_selected: bool       
 
     round: int
@@ -48,12 +59,6 @@ initial_state = {
     "final_winner": ""
 }
 
-class Topic(BaseModel):
-    topic_title: str = Field(description="The title of the debate topic")
-    description: str = Field(description="A brief description of the debate topic")
-
-class TopicList(BaseModel):
-    topics: List[Topic] = Field(description="A list of exactly 5 debate topics")
 
 
 def topic_generator(state: DebateState):
@@ -94,9 +99,10 @@ graph_builder.add_edge(START, "topic_generator")
 graph_builder.add_edge("topic_generator", "topic_selection")
 graph_builder.add_edge("topic_selection", END)
 
-graph = graph_builder.compile(config=config)
+graph = graph_builder.compile(checkpointer=MemorySaver())
 
 while True:
+    state = initial_state
     result = graph.invoke(state, config=config)
 
     # Interrupt happened
@@ -112,7 +118,7 @@ while True:
 
             choice = int(input("Your choice: "))
 
-            # IMPORTANT: replace state with Command
+
             state = Command(resume=choice)
             continue
 
