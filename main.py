@@ -1,6 +1,4 @@
-from cmd import PROMPT
 import os
-from symbol import argument
 from dotenv import load_dotenv
 from typing import TypedDict, List, Dict
 from pydantic import BaseModel, Field
@@ -15,10 +13,8 @@ load_dotenv()
 
 # ------------------ LLM ------------------
 
-model_name = "gemma3:latest"
-
 llm = ChatOllama(
-    model=model_name,
+    model="gemma3:latest",
     temperature=0.1,
 )
 
@@ -27,35 +23,42 @@ config = {"configurable": {"thread_id": "debate-1"}}
 # ------------------ Schemas ------------------
 
 class Topic(BaseModel):
-    topic_title: str = Field(description="The title of the debate topic")
-    description: str = Field(description="A brief description of the debate topic")
+    topic_title: str
+    description: str
 
 class TopicList(BaseModel):
-    topics: List[Topic] = Field(description="A list of exactly 5 debate topics")
+    topics: List[Topic]
+
+class Score(BaseModel):
+    pro_agent_score: int
+    pro_score_reason: str
+    con_agent_score: int
+    con_score_reason: str
 
 # ------------------ State ------------------
 
 class DebateState(TypedDict):
     topic: Dict
     topic_options: List[Dict]
-    topic_selected: bool       
+    topic_selected: bool
 
     round: int
     max_rounds: int
-    history: list
-    scores: dict
-    scores_reason: dict
+    history: List[Dict]
+
+    scores: Dict
+    scores_reason: Dict
     final_winner: str
 
 initial_state: DebateState = {
     "topic": {},
     "topic_options": [],
     "topic_selected": False,
-
     "round": 1,
     "max_rounds": 3,
     "history": [],
     "scores": {"pro": 0, "con": 0},
+    "scores_reason": {},
     "final_winner": ""
 }
 
@@ -68,17 +71,16 @@ def topic_generator_agent(state: DebateState):
 Generate exactly 5 high-quality debate topics.
 
 Constraints:
-- Each topic must be clear and controversial
-- Max 12 words per topic
+- Clear and controversial
+- Max 12 words
 - No duplicates
-- Cover diverse domains (technology, ethics, society, economy)
-- NO HTML
+- Diverse domains
 - Plain text only
 """)
 
     return {
         **state,
-        "topic_options": [t.dict() for t in response.topics],
+        "topic_options": [t.model_dump() for t in response.topics],
         "topic_selected": False
     }
 
@@ -92,8 +94,8 @@ def topic_selection(state: DebateState):
     selected_topic = state["topic_options"][choice]
 
     print(
-        f"\nSelected topic: "
-        f"{selected_topic['topic_title']} — {selected_topic['description']}"
+        f"\nSelected topic:\n"
+        f"{selected_topic['topic_title']} — {selected_topic['description']}\n"
     )
 
     return {
@@ -105,118 +107,111 @@ def topic_selection(state: DebateState):
 
 def pro_agent(state: DebateState):
     topic = state["topic"]["topic_title"]
-    description = state["topic"]["description"]
-
     history = state["history"]
 
     prompt = f"""
-        You are the PRO side in a debate.
+You are the PRO side in a debate.
 
-        Topic: {topic}
+Topic: {topic}
 
-        Make a strong, clear argument supporting the topic.
-        Be concise but persuasive.
-        No bullet points, just a paragraph.
-    """
+Previous debate:
+{history}
+
+Make a NEW strong argument supporting the topic.
+Do NOT repeat previous arguments.
+Be persuasive and concise.
+"""
 
     response = llm.invoke(prompt)
     argument = response.content
 
+    print("\n[PRO]:\n", argument)
+
     return {
         **state,
-        'history' : history + [{
-            'role': 'pro',
-            'content': argument,
-            'round' : state['round']
+        "history": history + [{
+            "role": "pro",
+            "content": argument,
+            "round": state["round"]
         }]
     }
 
+
 def con_agent(state: DebateState):
-    last_argument = state['history'][-1].content
-    topic = state['topic']
+    topic = state["topic"]["topic_title"]
+    last_argument = state["history"][-1]["content"]
 
     prompt = f"""
-        You are the CON side in a debate.
+You are the CON side in a debate.
 
-        Topic: {topic}
+Topic: {topic}
 
-        Opponent argument:
-        {last_argument}
+Opponent argument:
+{last_argument}
 
-        - Refute the opponent and argue against the topic.
-        - Be sharp and persuasive.
-        - No bullet points, just a paragraph.
-        - NO HTML
-        - Plain text only
-    """
+Refute it and argue against the topic.
+Be sharp, logical, and persuasive.
+Do NOT repeat earlier arguments.
+"""
 
     response = llm.invoke(prompt)
     counter_argument = response.content
 
+    print("\n[CON]:\n", counter_argument)
+
     return {
         **state,
-        'history': state['history'] + [{
-            'role': 'con',
-            'content': argument,
-            'round': state['round']
-        }]
+        "history": state["history"] + [{
+            "role": "con",
+            "content": counter_argument,
+            "round": state["round"]
+        }],
+        "round": state["round"] + 1
     }
-
-class Score(BaseModel):
-    pro_agent_score: int = Field(description='The score for the pro side agent in the debate.')
-    pro_score_reason: str = Field(description="the reason behind the pro side score")
-
-    con_agent_score: int = Field(description='The score for the con side agent in the debate.')
-    con_score_reason: str = Field(description="the reason behind the con side score")
 
 
 def judge_agent(state: DebateState):
     topic = state["topic"]["topic_title"]
     history = state["history"]
 
-    # Format history nicely
     debate_text = ""
     for h in history:
-        role = h["role"].upper()
-        debate_text += f"{role}: {h['content']}\n\n"
+        debate_text += f"{h['role'].upper()}: {h['content']}\n\n"
 
     prompt = f"""
-        You are an expert debate judge.
+You are an expert debate judge.
 
-        Topic: {topic}
+Topic: {topic}
 
-        Debate transcript:
-        {debate_text}
+Debate transcript:
+{debate_text}
 
-        Task:
-        - Decide which side is more convincing (PRO or CON)
-        - give each side a score and the reason behind it.
-    """
+Task:
+- Score both sides (0–10)
+- Explain reasoning
+- Decide winner
+"""
+
     structured_llm = llm.with_structured_output(Score)
-    response = structured_llm.invoke(prompt)
-    output = response.content
+    output = structured_llm.invoke(prompt)
 
     print("\n[JUDGE DECISION]")
     print(output)
 
-    winner = "pro agent" if (output.pro_agent_score > output.cont_agent_score)  else 'cont agent'
+    winner = "pro" if output.pro_agent_score > output.con_agent_score else "con"
 
     return {
         **state,
         "final_winner": winner,
-        'scores': {
-            'pro_agent': output.pro_agent_score,
-            'con_agent': output.con_agent_score
+        "scores": {
+            "pro": output.pro_agent_score,
+            "con": output.con_agent_score
         },
-        "scores_reasoning": {
-            'resaon_for_pro_agent_score': output.pro_score_reason,
-            'resaon_for_con_agent_score': output.con_score_reason 
+        "scores_reason": {
+            "pro": output.pro_score_reason,
+            "con": output.con_score_reason
         }
     }
-
-
-
-
 
 # ------------------ Graph ------------------
 
@@ -224,10 +219,30 @@ graph_builder = StateGraph(DebateState)
 
 graph_builder.add_node("topic_generator", topic_generator_agent)
 graph_builder.add_node("topic_selection", topic_selection)
+graph_builder.add_node("pro_agent", pro_agent)
+graph_builder.add_node("con_agent", con_agent)
+graph_builder.add_node("judge_agent", judge_agent)
 
 graph_builder.add_edge(START, "topic_generator")
 graph_builder.add_edge("topic_generator", "topic_selection")
-graph_builder.add_edge("topic_selection", END)
+graph_builder.add_edge("topic_selection", "pro_agent")
+graph_builder.add_edge("pro_agent", "con_agent")
+
+def should_continue(state: DebateState):
+    if state["round"] > state["max_rounds"]:
+        return "judge"
+    return "continue"
+
+graph_builder.add_conditional_edges(
+    "con_agent",
+    should_continue,
+    {
+        "judge": "judge_agent",
+        "continue": "pro_agent"
+    }
+)
+
+graph_builder.add_edge("judge_agent", END)
 
 graph = graph_builder.compile(checkpointer=MemorySaver())
 
@@ -238,7 +253,6 @@ state = initial_state
 while True:
     result = graph.invoke(state, config=config, version="v2")
 
-    # Interrupt handling
     if result.interrupts:
         data = result.interrupts[0].value
         options = data["options"]
@@ -248,9 +262,15 @@ while True:
             print(f"{i}: {t['topic_title']} — {t['description']}")
 
         choice = int(input("\nYour choice: "))
-
         state = Command(resume=choice)
         continue
 
-    # Finished execution
     break
+
+# ------------------ Final Output ------------------
+
+print("\n=== FINAL RESULT ===\n")
+
+print("Winner:", result.value["final_winner"])
+print("\nScores:", result.value["scores"])
+print("\nReasoning:", result.value["scores_reason"])
