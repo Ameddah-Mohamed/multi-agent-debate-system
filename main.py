@@ -44,6 +44,7 @@ class DebateState(TypedDict):
     max_rounds: int
     history: list
     scores: dict
+    scores_reason: dict
     final_winner: str
 
 initial_state: DebateState = {
@@ -60,7 +61,7 @@ initial_state: DebateState = {
 
 # ------------------ Nodes ------------------
 
-def topic_generator(state: DebateState):
+def topic_generator_agent(state: DebateState):
     structured_llm = llm.with_structured_output(TopicList)
 
     response = structured_llm.invoke("""
@@ -161,6 +162,59 @@ def con_agent(state: DebateState):
         }]
     }
 
+class Score(BaseModel):
+    pro_agent_score: int = Field(description='The score for the pro side agent in the debate.')
+    pro_score_reason: str = Field(description="the reason behind the pro side score")
+
+    con_agent_score: int = Field(description='The score for the con side agent in the debate.')
+    con_score_reason: str = Field(description="the reason behind the con side score")
+
+
+def judge_agent(state: DebateState):
+    topic = state["topic"]["topic_title"]
+    history = state["history"]
+
+    # Format history nicely
+    debate_text = ""
+    for h in history:
+        role = h["role"].upper()
+        debate_text += f"{role}: {h['content']}\n\n"
+
+    prompt = f"""
+        You are an expert debate judge.
+
+        Topic: {topic}
+
+        Debate transcript:
+        {debate_text}
+
+        Task:
+        - Decide which side is more convincing (PRO or CON)
+        - give each side a score and the reason behind it.
+    """
+    structured_llm = llm.with_structured_output(Score)
+    response = structured_llm.invoke(prompt)
+    output = response.content
+
+    print("\n[JUDGE DECISION]")
+    print(output)
+
+    winner = "pro agent" if (output.pro_agent_score > output.cont_agent_score)  else 'cont agent'
+
+    return {
+        **state,
+        "final_winner": winner,
+        'scores': {
+            'pro_agent': output.pro_agent_score,
+            'con_agent': output.con_agent_score
+        },
+        "scores_reasoning": {
+            'resaon_for_pro_agent_score': output.pro_score_reason,
+            'resaon_for_con_agent_score': output.con_score_reason 
+        }
+    }
+
+
 
 
 
@@ -168,7 +222,7 @@ def con_agent(state: DebateState):
 
 graph_builder = StateGraph(DebateState)
 
-graph_builder.add_node("topic_generator", topic_generator)
+graph_builder.add_node("topic_generator", topic_generator_agent)
 graph_builder.add_node("topic_selection", topic_selection)
 
 graph_builder.add_edge(START, "topic_generator")
