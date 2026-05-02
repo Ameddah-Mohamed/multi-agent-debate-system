@@ -1,4 +1,6 @@
+from cmd import PROMPT
 import os
+from symbol import argument
 from dotenv import load_dotenv
 from typing import TypedDict, List, Dict
 from pydantic import BaseModel, Field
@@ -127,6 +129,39 @@ def pro_agent(state: DebateState):
             'round' : state['round']
         }]
     }
+
+def con_agent(state: DebateState):
+    last_argument = state['history'][-1].content
+    topic = state['topic']
+
+    prompt = f"""
+        You are the CON side in a debate.
+
+        Topic: {topic}
+
+        Opponent argument:
+        {last_argument}
+
+        - Refute the opponent and argue against the topic.
+        - Be sharp and persuasive.
+        - No bullet points, just a paragraph.
+        - NO HTML
+        - Plain text only
+    """
+
+    response = llm.invoke(prompt)
+    counter_argument = response.content
+
+    return {
+        **state,
+        'history': state['history'] + [{
+            'role': 'con',
+            'content': argument,
+            'round': state['round']
+        }]
+    }
+
+
 
 
 # ------------------ Graph ------------------
